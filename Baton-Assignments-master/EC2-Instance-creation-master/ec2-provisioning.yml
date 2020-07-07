@@ -1,0 +1,102 @@
+---
+- hosts: local
+  connection: local
+  gather_facts: False
+  vars:
+    instance_type: t2.micro
+    security_group: webservers_security_group
+    image: ami-0009e88f05cf1087c
+    keypair: AWS-Ansible 
+    region: ap-south-1
+    count: 1
+  vars_files:
+    - aws_keys.yml
+  tasks:
+    - name: Create a security group
+      ec2_group:
+        name: "{{ security_group }}"
+        description: The webservers security group
+        region: "{{ region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+
+    - name: Launch the new EC2 Instance
+      ec2:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        group: "{{ security_group }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ image }}"
+        wait: true 
+        region: "{{ region }}"
+        keypair: "{{ keypair }}"
+        count: "{{count}}"
+      register: ec2
+	  
+    - name: Add the created instances to host file so that we can contact it latter
+      add_host:
+        name: "{{ item.public_ip }}"
+        groups: webservers
+      with_items: "{{ ec2.instances }}"
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ item.public_ip }}"
+        port: 22 
+        state: started 
+      with_items: "{{ ec2.instances }}"
+	  
+- hosts: webservers
+  remote_user: ec2-user
+  become: yes
+  gather_facts: no
+  vars_files:
+    - aws_keys.yml
+  pre_tasks:
+    - name: install python
+      raw: 'sudo yum -y install python3'
+      
+    - name: install awscli & boto3
+      raw: 'sudo pip install awscli boto3' 
+    
+    - name: Configuring aws cli
+      raw: 'sudo aws configure set aws_access_key_id "{{ aws_access_key }}"' 
+    
+    - name: Configuring aws cli
+      raw: 'sudo aws configure set aws_secret_access_key "{{ aws_secret_key }}"' 
+      
+    - name: Create directory on new instance
+      file:
+        path: /home/user/scripts
+        state: directory
+
+    - name: Copy 
+      copy:
+        src: /home/local/EC2-Instance-creation-master/list_instances.py
+        dest: /home/user/scripts/list_instances.py
+    
+  tasks:
+    - name: Install Apache
+      yum:
+        name: httpd
+        state: present
+    - service: 
+        name: httpd
+        state: started
+        enabled: yes
